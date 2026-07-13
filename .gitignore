@@ -1,0 +1,4 @@
+node_modules/
+dist/
+gbp-credentials.json
+*.log
