@@ -93,6 +93,9 @@ const BASE_URLS = {
   placeActions: "https://mybusinessplaceactions.googleapis.com/v1",
   performance: "https://businessprofileperformance.googleapis.com/v1",
   legacyReviews: "https://mybusiness.googleapis.com/v4",
+  // Posts have no replacement surface in the newer Business Profile APIs; the legacy
+  // v4 localPosts endpoints (still documented/current) live on this host too.
+  posts: "https://mybusiness.googleapis.com/v4",
 } as const;
 
 class GbpApiError extends Error {
@@ -851,6 +854,135 @@ registerTool(
           },
         }
       )
+    )
+);
+
+// ===========================================================================
+// Local Posts — legacy v4 mybusiness.googleapis.com/v4
+// (Excluded from the upstream build as a scope decision; re-added here because Posts
+//  are the one GBP capability with no newer API surface.)
+// ===========================================================================
+
+const LocalPostCtaType = z.enum(["BOOK", "ORDER", "SHOP", "LEARN_MORE", "SIGN_UP", "CALL"]);
+const LocalPostTopicType = z.enum(["STANDARD", "EVENT", "OFFER"]);
+
+function buildLocalPost(a: {
+  summary?: string;
+  language_code?: string;
+  cta_type?: z.infer<typeof LocalPostCtaType>;
+  cta_url?: string;
+  photo_url?: string;
+  topic_type?: z.infer<typeof LocalPostTopicType>;
+  event?: unknown;
+  offer?: unknown;
+}): Record<string, unknown> {
+  const post: Record<string, unknown> = {};
+  if (a.language_code !== undefined) post.languageCode = a.language_code;
+  if (a.summary !== undefined) post.summary = a.summary;
+  if (a.topic_type !== undefined) post.topicType = a.topic_type;
+  if (a.cta_type !== undefined) {
+    post.callToAction =
+      a.cta_type === "CALL" ? { actionType: "CALL" } : { actionType: a.cta_type, url: a.cta_url };
+  }
+  if (a.photo_url !== undefined) post.media = [{ mediaFormat: "PHOTO", sourceUrl: a.photo_url }];
+  if (a.event !== undefined) post.event = a.event;
+  if (a.offer !== undefined) post.offer = a.offer;
+  return post;
+}
+
+const PostLocationArgs = {
+  account_id: z.string().describe("Numeric account id (without the accounts/ prefix)."),
+  location_id: z.string().describe("Numeric location id (without the locations/ prefix)."),
+};
+
+const PostBodyArgs = {
+  summary: z.string().max(1500).optional().describe("Post text (max 1500 chars)."),
+  language_code: z.string().optional().describe('BCP-47 language code, e.g. "en".'),
+  cta_type: LocalPostCtaType.optional().describe("Call-to-action button type. CALL uses the listing's phone (no url)."),
+  cta_url: z.string().url().optional().describe("Required for every cta_type except CALL."),
+  photo_url: z
+    .string()
+    .url()
+    .optional()
+    .describe("Publicly reachable JPG/PNG URL (>=250x250 px, >=10 KB)."),
+  topic_type: LocalPostTopicType.optional().describe('Defaults to STANDARD when omitted.'),
+  event: z.unknown().optional().describe("Raw Google Event JSON (topicType EVENT)."),
+  offer: z.unknown().optional().describe("Raw Google Offer JSON (topicType OFFER)."),
+};
+
+registerTool(
+  "create_local_post",
+  "Publishes a post (What's New / EVENT / OFFER) on a location via the legacy v4 localPosts API. summary is required by Google; optionally add a CTA button, a public photo URL, and event/offer details.",
+  {
+    ...PostLocationArgs,
+    ...PostBodyArgs,
+    summary: z.string().max(1500).describe("Post text (max 1500 chars)."),
+  },
+  async (a) =>
+    gbpRequest(
+      BASE_URLS.posts,
+      `/accounts/${a.account_id}/locations/${a.location_id}/localPosts`,
+      { method: "POST", body: buildLocalPost({ ...a, language_code: a.language_code ?? "en" }) }
+    )
+);
+
+registerTool(
+  "list_local_posts",
+  "Lists posts for a location.",
+  { ...PostLocationArgs, ...PageArgs },
+  async (a) =>
+    withPaging(
+      await gbpRequest(
+        BASE_URLS.posts,
+        `/accounts/${a.account_id}/locations/${a.location_id}/localPosts`,
+        { query: { pageSize: a.page_size, pageToken: a.page_token } }
+      )
+    )
+);
+
+registerTool(
+  "get_local_post",
+  "Gets a single post by id.",
+  {
+    ...PostLocationArgs,
+    post_id: z.string().describe("Post id (trailing id of the localPosts resource name)."),
+  },
+  async (a) =>
+    gbpRequest(
+      BASE_URLS.posts,
+      `/accounts/${a.account_id}/locations/${a.location_id}/localPosts/${a.post_id}`
+    )
+);
+
+registerTool(
+  "update_local_post",
+  'Updates fields on an existing post. Only fields named in update_mask are changed, e.g. "summary" or "summary,callToAction".',
+  {
+    ...PostLocationArgs,
+    post_id: z.string().describe("Post id (trailing id of the localPosts resource name)."),
+    update_mask: z.string().describe('Comma-separated field paths to update, e.g. "summary,callToAction".'),
+    ...PostBodyArgs,
+  },
+  async (a) =>
+    gbpRequest(
+      BASE_URLS.posts,
+      `/accounts/${a.account_id}/locations/${a.location_id}/localPosts/${a.post_id}`,
+      { method: "PATCH", query: { updateMask: a.update_mask }, body: buildLocalPost(a) }
+    )
+);
+
+registerTool(
+  "delete_local_post",
+  "Deletes a post.",
+  {
+    ...PostLocationArgs,
+    post_id: z.string().describe("Post id (trailing id of the localPosts resource name)."),
+  },
+  async (a) =>
+    gbpRequest(
+      BASE_URLS.posts,
+      `/accounts/${a.account_id}/locations/${a.location_id}/localPosts/${a.post_id}`,
+      { method: "DELETE" }
     )
 );
 
